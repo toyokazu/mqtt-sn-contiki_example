@@ -71,6 +71,326 @@
 #include "lib/newlib/syscalls.c" //Utilizado quando se usa malloc
 #endif
 
+/* DTLS start */
+
+#include "tinydtls.h"
+//#include "debug.h"
+#include "dtls_debug.h"
+#include "dtls.h"
+
+#if 0
+#include "time.h"
+static struct timespec start_time, end_time;
+#endif
+
+#ifdef DTLS_PSK
+/* The PSK information for DTLS */
+/* make sure that default identity and key fit into buffer, i.e.
+ * sizeof(PSK_DEFAULT_IDENTITY) - 1 <= PSK_ID_MAXLEN and
+ * sizeof(PSK_DEFAULT_KEY) - 1 <= PSK_MAXLEN
+*/
+
+#define PSK_ID_MAXLEN 32
+#define PSK_MAXLEN 32
+#define PSK_DEFAULT_IDENTITY "Client_identity"
+#define PSK_DEFAULT_KEY      "secretPSK"
+#endif /* DTLS_PSK */
+
+#define UIP_IP_BUF   ((struct uip_ip_hdr *)&uip_buf[UIP_LLH_LEN])
+#define UIP_UDP_BUF  ((struct uip_udp_hdr *)&uip_buf[UIP_LLIPH_LEN])
+
+#define MAX_PAYLOAD_LEN 120
+
+static session_t dst;
+static struct uip_udp_conn *client_conn;
+static dtls_context_t *dtls_context;
+//static char buf[200];
+//static size_t buflen = 0;
+static struct process *main_process = NULL;
+
+static const unsigned char ecdsa_priv_key[] = {
+			0x41, 0xC1, 0xCB, 0x6B, 0x51, 0x24, 0x7A, 0x14,
+			0x43, 0x21, 0x43, 0x5B, 0x7A, 0x80, 0xE7, 0x14,
+			0x89, 0x6A, 0x33, 0xBB, 0xAD, 0x72, 0x94, 0xCA,
+			0x40, 0x14, 0x55, 0xA1, 0x94, 0xA9, 0x49, 0xFA};
+
+static const unsigned char ecdsa_pub_key_x[] = {
+			0x36, 0xDF, 0xE2, 0xC6, 0xF9, 0xF2, 0xED, 0x29,
+			0xDA, 0x0A, 0x9A, 0x8F, 0x62, 0x68, 0x4E, 0x91,
+			0x63, 0x75, 0xBA, 0x10, 0x30, 0x0C, 0x28, 0xC5,
+			0xE4, 0x7C, 0xFB, 0xF2, 0x5F, 0xA5, 0x8F, 0x52};
+
+static const unsigned char ecdsa_pub_key_y[] = {
+			0x71, 0xA0, 0xD4, 0xFC, 0xDE, 0x1A, 0xB8, 0x78,
+			0x5A, 0x3C, 0x78, 0x69, 0x35, 0xA7, 0xCF, 0xAB,
+			0xE9, 0x3F, 0x98, 0x72, 0x09, 0xDA, 0xED, 0x0B,
+			0x4F, 0xAB, 0xC3, 0x6F, 0xC7, 0x72, 0xF8, 0x29};
+
+static int
+try_send(struct dtls_context_t *ctx, session_t *dst, const void *data, uint16_t datalen) {
+  int res;
+  int offset = 0;
+  while ((res = dtls_write(ctx, dst, (uint8 *)(data + offset), datalen - offset)) > 0) {
+    offset += res;
+  }
+  if (res < 0) {
+    dtls_emerg("cannot send encrypted data\n");
+    return res;  
+  } else {
+    return 0;
+  }
+}
+
+static int
+read_from_peer(struct dtls_context_t *ctx, 
+	       session_t *session, uint8 *data, size_t len) {
+  size_t i;
+  for (i = 0; i < len; i++)
+    PRINTF("%c", data[i]);
+
+  mqtt_sn_recv_parser(data);  
+
+  return 0;
+}
+
+static int
+send_to_peer(struct dtls_context_t *ctx, 
+	     session_t *session, uint8 *data, size_t len) {
+
+  struct uip_udp_conn *conn = (struct uip_udp_conn *)dtls_get_app_data(ctx);
+
+  uip_ipaddr_copy(&conn->ripaddr, &session->addr);
+  conn->rport = session->port;
+
+  PRINTF("send to ");
+  PRINT6ADDR(&conn->ripaddr);
+  PRINTF(":%u\n", uip_ntohs(conn->rport));
+
+  uip_udp_packet_send(conn, data, len);
+
+  /* Restore server connection to allow data from any node */
+  /* FIXME: do we want this at all? */
+  memset(&conn->ripaddr, 0, sizeof(conn->ripaddr));
+  memset(&conn->rport, 0, sizeof(conn->rport));
+
+  return len;
+}
+
+static int
+dtls_event_handler(struct dtls_context_t *ctx, session_t *session, 
+		dtls_alert_level_t level, unsigned short code) {
+  if (code == DTLS_EVENT_CONNECTED) {
+    process_post(main_process, PROCESS_EVENT_CONTINUE, NULL);
+  }
+  return 0;
+}
+
+#ifdef DTLS_PSK
+static unsigned char psk_id[PSK_ID_MAXLEN] = PSK_DEFAULT_IDENTITY;
+static size_t psk_id_length = sizeof(PSK_DEFAULT_IDENTITY) - 1;
+static unsigned char psk_key[PSK_MAXLEN] = PSK_DEFAULT_KEY;
+static size_t psk_key_length = sizeof(PSK_DEFAULT_KEY) - 1;
+
+#ifdef __GNUC__
+#define UNUSED_PARAM __attribute__((unused))
+#else
+#define UNUSED_PARAM
+#endif /* __GNUC__ */
+
+/* This function is the "key store" for tinyDTLS. It is called to
+ * retrieve a key for the given identity within this particular
+ * session. */
+static int
+get_psk_info(struct dtls_context_t *ctx UNUSED_PARAM,
+	    const session_t *session UNUSED_PARAM,
+	    dtls_credentials_type_t type,
+	    const unsigned char *id, size_t id_len,
+	    unsigned char *result, size_t result_length) {
+
+  switch (type) {
+  case DTLS_PSK_IDENTITY:
+    if (result_length < psk_id_length) {
+      dtls_warn("cannot set psk_identity -- buffer too small\n");
+      return dtls_alert_fatal_create(DTLS_ALERT_INTERNAL_ERROR);
+    }
+
+    memcpy(result, psk_id, psk_id_length);
+    return psk_id_length;
+  case DTLS_PSK_KEY:
+    if (id_len != psk_id_length || memcmp(psk_id, id, id_len) != 0) {
+      dtls_warn("PSK for unknown id requested, exiting\n");
+      return dtls_alert_fatal_create(DTLS_ALERT_ILLEGAL_PARAMETER);
+    } else if (result_length < psk_key_length) {
+      dtls_warn("cannot set psk -- buffer too small\n");
+      return dtls_alert_fatal_create(DTLS_ALERT_INTERNAL_ERROR);
+    }
+
+    memcpy(result, psk_key, psk_key_length);
+    return psk_key_length;
+  default:
+    dtls_warn("unsupported request type: %d\n", type);
+  }
+
+  return dtls_alert_fatal_create(DTLS_ALERT_INTERNAL_ERROR);
+}
+#endif /* DTLS_PSK */
+
+#ifdef DTLS_ECC
+static int
+get_ecdsa_key(struct dtls_context_t *ctx,
+	      const session_t *session,
+	      const dtls_ecdsa_key_t **result) {
+  static const dtls_ecdsa_key_t ecdsa_key = {
+    .curve = DTLS_ECDH_CURVE_SECP256R1,
+    .priv_key = ecdsa_priv_key,
+    .pub_key_x = ecdsa_pub_key_x,
+    .pub_key_y = ecdsa_pub_key_y
+  };
+
+  *result = &ecdsa_key;
+  return 0;
+}
+
+static int
+verify_ecdsa_key(struct dtls_context_t *ctx,
+		 const session_t *session,
+		 const unsigned char *other_pub_x,
+		 const unsigned char *other_pub_y,
+		 size_t key_size) {
+  return 0;
+}
+#endif /* DTLS_ECC */
+
+PROCESS(udp_server_process, "UDP server process");
+AUTOSTART_PROCESSES(&udp_server_process);
+/*---------------------------------------------------------------------------*/
+static void
+dtls_handle_read(dtls_context_t *ctx) {
+  static session_t session;
+
+  if(uip_newdata()) {
+    uip_ipaddr_copy(&session.addr, &UIP_IP_BUF->srcipaddr);
+    session.port = UIP_UDP_BUF->srcport;
+    session.size = sizeof(session.addr) + sizeof(session.port);
+
+    ((char *)uip_appdata)[uip_datalen()] = 0;
+    PRINTF("Client received message from ");
+    PRINT6ADDR(&session.addr);
+    PRINTF(":%d\n", uip_ntohs(session.port));
+
+    dtls_handle_message(ctx, &session, uip_appdata, uip_datalen());
+  }
+}
+/*---------------------------------------------------------------------------*/
+static void
+print_local_addresses(void)
+{
+  int i;
+  uint8_t state;
+
+  PRINTF("Client IPv6 addresses: ");
+  for(i = 0; i < UIP_DS6_ADDR_NB; i++) {
+    state = uip_ds6_if.addr_list[i].state;
+    if(uip_ds6_if.addr_list[i].isused &&
+       (state == ADDR_TENTATIVE || state == ADDR_PREFERRED)) {
+      PRINT6ADDR(&uip_ds6_if.addr_list[i].ipaddr);
+      PRINTF("\n");
+    }
+  }
+}
+
+static void
+set_connection_address(uip_ipaddr_t *ipaddr)
+{
+#if 0
+#define _QUOTEME(x) #x
+#define QUOTEME(x) _QUOTEME(x)
+#ifdef UDP_CONNECTION_ADDR
+  if(uiplib_ipaddrconv(QUOTEME(UDP_CONNECTION_ADDR), ipaddr) == 0) {
+    PRINTF("UDP client failed to parse address '%s'\n", QUOTEME(UDP_CONNECTION_ADDR));
+  }
+#elif UIP_CONF_ROUTER
+  uip_ip6addr(ipaddr,0xaaaa,0,0,0,0x0200,0x0000,0x0000,0x0001);
+#else
+  uip_ip6addr(ipaddr,0xfe80,0,0,0,0x6466,0x6666,0x6666,0x6666);
+#endif /* UDP_CONNECTION_ADDR */
+#endif
+  uip_ip6addr(ipaddr,0xaaaa,0,0,0,0x0000,0x0000,0x0000,0x0001);
+}
+
+void
+init_dtls(session_t *dst) {
+  static dtls_handler_t cb = {
+    .write = send_to_peer,
+    .read  = read_from_peer,
+    .event = dtls_event_handler,
+#ifdef DTLS_PSK
+    .get_psk_info = get_psk_info,
+#endif /* DTLS_PSK */
+#ifdef DTLS_ECC
+    .get_ecdsa_key = get_ecdsa_key,
+    .verify_ecdsa_key = verify_ecdsa_key
+#endif /* DTLS_ECC */
+  };
+  PRINTF("DTLS client started\n");
+
+  print_local_addresses();
+
+  dst->size = sizeof(dst->addr) + sizeof(dst->port);
+//  dst->port = UIP_HTONS(20220);
+  dst->port = UIP_HTONS(1885);
+
+  set_connection_address(&dst->addr);
+  client_conn = udp_new(&dst->addr, 0, NULL);
+  udp_bind(client_conn, dst->port);
+
+  PRINTF("set connection address to ");
+  PRINT6ADDR(&dst->addr);
+  PRINTF(":%d\n", uip_ntohs(dst->port));
+
+  dtls_set_log_level(DTLS_LOG_EMERG);
+  //dtls_set_log_level(DTLS_LOG_DEBUG);
+
+  dtls_context = dtls_new_context(client_conn);
+  if (dtls_context)
+    dtls_set_handler(dtls_context, &cb);
+}
+
+/*---------------------------------------------------------------------------*/
+PROCESS_THREAD(udp_server_process, ev, data)
+{
+  PROCESS_BEGIN();
+
+#if 0
+  static struct etimer et;
+  etimer_set(&et, CLOCK_CONF_SECOND*3);
+  PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_TIMER);
+  etimer_stop(&et);
+#endif
+
+  dtls_init();
+  init_dtls(&dst);
+
+  if (!dtls_context) {
+    dtls_emerg("cannot create context\n");
+    PROCESS_EXIT();
+  }
+
+  dtls_connect(dtls_context, &dst);
+
+  while(1) {
+    PROCESS_YIELD();
+    if(ev == tcpip_event) {
+      dtls_handle_read(dtls_context);
+    }
+  }
+  
+  PROCESS_END();
+}
+/*---------------------------------------------------------------------------*/
+
+/* DTLS end */
+
 static struct ctimer              mqtt_time_connect;       // Estrutura de temporização para envio de CONNECT
 static struct ctimer              mqtt_time_register;      // Estrutura de temporização para envio de REGISTER
 static struct ctimer              mqtt_time_ping;          // Estrutura de temporização para envio de PING
@@ -382,7 +702,8 @@ resp_con_t mqtt_sn_will_topic_send(void){
   packet.will_topic[topic_name_len] = '\0';
 
   debug_mqtt("Enviando o pacote @WILL TOPIC");
-  simple_udp_send(&g_mqtt_sn_con.udp_con,&packet, packet.length);
+  //simple_udp_send(&g_mqtt_sn_con.udp_con,&packet, packet.length);
+  try_send(dtls_context, &dst, &packet, packet.length);
 
   return SUCCESS_CON;
 }
@@ -404,7 +725,8 @@ resp_con_t mqtt_sn_will_message_send(void){
   packet.will_message[message_name_len] = '\0';
 
   debug_mqtt("Enviando o pacote @WILL MESSAGE");
-  simple_udp_send(&g_mqtt_sn_con.udp_con,&packet, packet.length);
+  //simple_udp_send(&g_mqtt_sn_con.udp_con,&packet, packet.length);
+  try_send(dtls_context, &dst, &packet, packet.length);
 
   return SUCCESS_CON;
 }
@@ -418,7 +740,8 @@ void mqtt_sn_ping_send(void){
   //debug_mqtt("Client ID PING:%s",ping_request.client_id);
   ping_request.length = 0x02 + strlen(ping_request.client_id);
   //debug_mqtt("Enviando @PINGREQ");
-  simple_udp_send(&g_mqtt_sn_con.udp_con,&ping_request, ping_request.length);
+  //simple_udp_send(&g_mqtt_sn_con.udp_con,&ping_request, ping_request.length);
+  try_send(dtls_context, &dst, &ping_request, ping_request.length);
 }
 
 resp_con_t mqtt_sn_con_send(void){
@@ -438,7 +761,8 @@ resp_con_t mqtt_sn_con_send(void){
 
   // debug_mqtt("CLIENT_ID:%s, Tamanho:%d",packet.client_id,strlen(packet.client_id));
   debug_mqtt("Enviando o pacote @CONNECT ");
-  simple_udp_send(&g_mqtt_sn_con.udp_con,&packet, packet.length);
+  //simple_udp_send(&g_mqtt_sn_con.udp_con,&packet, packet.length);
+  try_send(dtls_context, &dst, &packet, packet.length);
   // debug_mqtt("enviado!");
   return SUCCESS_CON;
 }
@@ -481,7 +805,8 @@ resp_con_t mqtt_sn_reg_send(void){
 
   debug_mqtt("Topico a registrar:%s [%d][MSG_ID:%d]",packet.topic_name,strlen(packet.topic_name),(int)mqtt_queue_first->data.id_task);
   debug_mqtt("Enviando o pacote @REGISTER");
-  simple_udp_send(&g_mqtt_sn_con.udp_con,&packet, packet.length);
+  //simple_udp_send(&g_mqtt_sn_con.udp_con,&packet, packet.length);
+  try_send(dtls_context, &dst, &packet, packet.length);
 
   return SUCCESS_CON;
 }
@@ -496,7 +821,8 @@ resp_con_t mqtt_sn_regack_send(uint16_t msg_id, uint16_t topic_id){
   packet.length = 0x07;
 
   debug_mqtt("Enviando o pacote @REGACK");
-  simple_udp_send(&g_mqtt_sn_con.udp_con,&packet, packet.length);
+  //simple_udp_send(&g_mqtt_sn_con.udp_con,&packet, packet.length);
+  try_send(dtls_context, &dst, &packet, packet.length);
   return SUCCESS_CON;
 }
 
@@ -548,7 +874,8 @@ resp_con_t mqtt_sn_pub_send(char *topic,char *message, bool retain_flag, uint8_t
 
   debug_mqtt("Enviando o pacote @PUBLISH");
   // debug_mqtt("Enviando o pacote @PUBLISH - Task:[%d]",(int)mqtt_queue_first->data.id_task);
-  simple_udp_send(&g_mqtt_sn_con.udp_con,&packet, packet.length);
+  //simple_udp_send(&g_mqtt_sn_con.udp_con,&packet, packet.length);
+  try_send(dtls_context, &dst, &packet, packet.length);
   return SUCCESS_CON;
 }
 
@@ -561,11 +888,12 @@ resp_con_t mqtt_sn_sub_send(char *topic, uint8_t qos){
   //   return FAIL_CON;
   // }
   size_t i = 0;
-  for (i=0; i < MAX_TOPIC_USED; i++)
-    if (strcmp(g_topic_bind[i].topic_name,topic) == 0) {
+  for (i=0; i < MAX_TOPIC_USED; i++) {
+   if (strcmp(g_topic_bind[i].topic_name,topic) == 0) {
       stopic = g_topic_bind[i].short_topic_id;
       break;
     }
+  }
 
   packet.type  = MQTT_SN_TYPE_SUBSCRIBE;
   packet.flags = 0x00;
@@ -582,7 +910,8 @@ resp_con_t mqtt_sn_sub_send(char *topic, uint8_t qos){
   // |_________________|______________________|___________|_______________|______________________________________|
   //
   debug_mqtt("Enviando o pacote @SUBSCRIBE");
-  simple_udp_send(&g_mqtt_sn_con.udp_con,&packet, packet.length);
+  //simple_udp_send(&g_mqtt_sn_con.udp_con,&packet, packet.length);
+  try_send(dtls_context, &dst, &packet, packet.length);
   return SUCCESS_CON;
 }
 
@@ -612,7 +941,8 @@ resp_con_t mqtt_sn_sub_send_wildcard(char *topic, uint8_t qos){
   // |_________________|______________________|___________|_______________|______________________________________|
   //
   debug_mqtt("Enviando o pacote @SUBSCRIBE(Wildcard)");
-  simple_udp_send(&g_mqtt_sn_con.udp_con,&packet, packet.length);
+  //simple_udp_send(&g_mqtt_sn_con.udp_con,&packet, packet.length);
+  try_send(dtls_context, &dst, &packet, packet.length);
   return SUCCESS_CON;
 }
 
@@ -624,7 +954,8 @@ resp_con_t mqtt_sn_disconnect(uint16_t duration){
   packet.length = 0x04;
   debug_mqtt("Desconectando do broker...");
 
-  simple_udp_send(&g_mqtt_sn_con.udp_con,&packet, packet.length);
+  //simple_udp_send(&g_mqtt_sn_con.udp_con,&packet, packet.length);
+  try_send(dtls_context, &dst, &packet, packet.length);
   return SUCCESS_CON;
 }
 
@@ -864,6 +1195,7 @@ void mqtt_sn_recv_parser(const uint8_t *data){
     }
 }
 
+#if 0
 void mqtt_sn_udp_rec_cb(struct simple_udp_connection *c,
                             const uip_ipaddr_t *sender_addr,
                             uint16_t sender_port,
@@ -874,6 +1206,7 @@ void mqtt_sn_udp_rec_cb(struct simple_udp_connection *c,
   debug_udp("##########RECEBIDO ALGO VIA UDP!##########");
   mqtt_sn_recv_parser(data);
 }
+#endif
 
 resp_con_t mqtt_sn_create_sck(mqtt_sn_con_t mqtt_sn_connection, char *topics[], size_t topic_len, mqtt_sn_cb_f cb_f){
   callback_mqtt = cb_f;
@@ -887,7 +1220,7 @@ resp_con_t mqtt_sn_create_sck(mqtt_sn_con_t mqtt_sn_connection, char *topics[], 
   /************************************ RECONEXÃO******************************/
 
   static uip_ipaddr_t broker_addr;
-  static uint8_t con_udp_status = 0;
+  //static uint8_t con_udp_status = 0;
 
   g_mqtt_sn_con = mqtt_sn_connection;
   uip_ip6addr(&broker_addr, *g_mqtt_sn_con.ipv6_broker,
@@ -911,6 +1244,7 @@ resp_con_t mqtt_sn_create_sck(mqtt_sn_con_t mqtt_sn_connection, char *topics[], 
 
 
   if(!g_recon){
+#if 0
     con_udp_status = simple_udp_register(&g_mqtt_sn_con.udp_con,
                                           g_mqtt_sn_con.udp_port,
                                           &broker_addr,
@@ -918,8 +1252,16 @@ resp_con_t mqtt_sn_create_sck(mqtt_sn_con_t mqtt_sn_connection, char *topics[], 
                                           mqtt_sn_udp_rec_cb);
     if(!con_udp_status)
       return FAIL_CON;
+#endif
+
+    main_process = PROCESS_CURRENT();
+    process_start(&udp_server_process, NULL);
   }
 
+  return SUCCESS_CON;
+}
+
+resp_con_t mqtt_sn_create_sck_2(mqtt_sn_con_t mqtt_sn_connection, char *topics[], size_t topic_len, mqtt_sn_cb_f cb_f){
   if (g_mqtt_sn_con.will_topic && g_mqtt_sn_con.will_message)
     g_will = true;
 

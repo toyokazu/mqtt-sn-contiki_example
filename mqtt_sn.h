@@ -538,6 +538,8 @@ void mqtt_sn_recv_parser(const uint8_t *data);
  **/
 resp_con_t mqtt_sn_create_sck(mqtt_sn_con_t mqtt_sn_connection, char *topics[],size_t topic_len, mqtt_sn_cb_f cb_f);
 
+resp_con_t mqtt_sn_create_sck_2(mqtt_sn_con_t mqtt_sn_connection, char *topics[],size_t topic_len, mqtt_sn_cb_f cb_f);
+
 /** @brief Envio de mensagens ao broker do tipo REGISTER
  *
  * 		Envia ao broker mensagens do tipo REGISTER com o topic name informado conforme a tarefa
@@ -777,7 +779,7 @@ resp_con_t verf_hist_sub(char *topic);
  *  @retval SUCCESS_CON   Sucesso ao enviar a desconexão
  *
  **/
-resp_con_t mqtt_sn_disconnect_send(uint16_t duration);
+resp_con_t mqtt_sn_disconnect(uint16_t duration);
 
 /** @brief Inicializa os vetores MQTT-SN
  *

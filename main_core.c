@@ -39,7 +39,8 @@
 #include <string.h>
 #include <stdlib.h>
 
-static uint16_t udp_port = 1884;
+
+static uint16_t udp_port = 1885;
 static uint16_t keep_alive = 5;
 static uint16_t broker_address[] = {0xaaaa, 0, 0, 0, 0, 0, 0, 0x1};
 static struct   etimer time_poll;
@@ -47,12 +48,15 @@ static struct   etimer time_poll;
 static char     pub_test[20];
 static char     device_id[17];
 static char     topic_hw[25];
+#if 0
 static char     *topics_mqtt[] = {"/topic_1",
                                   "/topic_2",
                                   "/topic_3",
                                   "/topic_4",
                                   "/topic_5",
                                   "/topic_6"};
+#endif
+static char     *topics_mqtt[] = {"/topic_1"};
 // static char     *will_topic = "/6lowpan_node/offline";
 // static char     *will_message = "O dispositivo esta offline";
 // This topics will run so much faster than others
@@ -60,12 +64,11 @@ static char     *topics_mqtt[] = {"/topic_1",
 mqtt_sn_con_t mqtt_sn_connection;
 
 void mqtt_sn_callback(char *topic, char *message){
-  printf("\nMessage received:");
-  printf("\nTopic:%s Message:%s",topic,message);
+  //printf("Message received %d:\n", pub_sub_loop++);
+  printf("Topic:%s Message:%s\n",topic,message);
 }
 
 void init_broker(void){
-  char *all_topics[ss(topics_mqtt)+1];
   sprintf(device_id,"%02X%02X%02X%02X%02X%02X%02X%02X",
           linkaddr_node_addr.u8[0],linkaddr_node_addr.u8[1],
           linkaddr_node_addr.u8[2],linkaddr_node_addr.u8[3],
@@ -83,17 +86,6 @@ void init_broker(void){
   mqtt_sn_connection.will_message  = 0x00;
 
   mqtt_sn_init();   // Inicializa alocação de eventos e a principal PROCESS_THREAD do MQTT-SN
-
-  size_t i;
-  for(i=0;i<ss(topics_mqtt);i++)
-    all_topics[i] = topics_mqtt[i];
-  all_topics[i] = topic_hw;
-
-  mqtt_sn_create_sck(mqtt_sn_connection,
-                     all_topics,
-                     ss(all_topics),
-                     mqtt_sn_callback);
-  mqtt_sn_sub(topic_hw,0);
 }
 
 /*---------------------------------------------------------------------------*/
@@ -104,9 +96,34 @@ AUTOSTART_PROCESSES(&init_system_process);
 PROCESS_THREAD(init_system_process, ev, data) {
   PROCESS_BEGIN();
 
-  debug_os("Initializing the MQTT_SN_DEMO");
+  debug_os("Initializing the MQTT_SN_DEMO\n");
+
+#if 0
+  etimer_set(&time_poll, CLOCK_CONF_SECOND*5);
+  PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_TIMER);
+  etimer_stop(&time_poll);
+#endif
+
+//  char *all_topics[ss(topics_mqtt)+1];
+  char *all_topics[ss(topics_mqtt)];
+  size_t i;
+  for(i=0;i<ss(topics_mqtt);i++)
+    all_topics[i] = topics_mqtt[i];
+  //all_topics[i] = topic_hw;
 
   init_broker();
+
+  mqtt_sn_create_sck(mqtt_sn_connection,
+                     all_topics,
+                     ss(all_topics),
+                     mqtt_sn_callback);
+  PROCESS_WAIT_EVENT_UNTIL(ev == PROCESS_EVENT_CONTINUE);
+  mqtt_sn_create_sck_2(mqtt_sn_connection,
+                     all_topics,
+                     ss(all_topics),
+                     mqtt_sn_callback);
+  //mqtt_sn_sub(topic_hw,0);
+    mqtt_sn_sub("/topic_1", 0);
 
   etimer_set(&time_poll, CLOCK_SECOND);
 
@@ -114,7 +131,8 @@ PROCESS_THREAD(init_system_process, ev, data) {
       PROCESS_WAIT_EVENT();
       sprintf(pub_test,"%s",topic_hw);
       mqtt_sn_pub("/topic_1",pub_test,true,0);
-      // debug_os("State MQTT:%s",mqtt_sn_check_status_string());
+      printf("State MQTT:%s\n",mqtt_sn_check_status_string());
+      //printf("Message sent %d:\n", pub_sub_loop);
       if (etimer_expired(&time_poll))
         etimer_reset(&time_poll);
   }

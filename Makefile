@@ -10,5 +10,9 @@ CFLAGS += -DPROJECT_CONF_H=\"project-conf.h\"
 CFLAGS += -ffunction-sections
 LDFLAGS += -Wl,--gc-sections,--undefined=_reset_vector__,--undefined=InterruptVectors,--undefined=_copy_data_init__,--undefined=_clear_bss_init__,--undefined=_end_of_init__
 
+CFLAGS += -DSHA2_USE_INTTYPES_H
+
+APPS += tinydtls/aes tinydtls/sha2 tinydtls/ecc tinydtls
+
 CONTIKI=../
 include $(CONTIKI)/Makefile.include
