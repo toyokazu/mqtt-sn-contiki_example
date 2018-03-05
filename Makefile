@@ -13,6 +13,7 @@ LDFLAGS += -Wl,--gc-sections,--undefined=_reset_vector__,--undefined=InterruptVe
 CFLAGS += -DSHA2_USE_INTTYPES_H
 
 APPS += tinydtls/aes tinydtls/sha2 tinydtls/ecc tinydtls
+APPS += powertrace
 
 CONTIKI=../
 include $(CONTIKI)/Makefile.include

@@ -39,6 +39,7 @@
 #include <string.h>
 #include <stdlib.h>
 
+#include "powertrace.h"
 
 static uint16_t udp_port = 1885;
 static uint16_t keep_alive = 5;
@@ -97,6 +98,7 @@ PROCESS_THREAD(init_system_process, ev, data) {
   PROCESS_BEGIN();
 
   debug_os("Initializing the MQTT_SN_DEMO\n");
+  powertrace_start(CLOCK_SECOND * 1);
 
 #if 0
   etimer_set(&time_poll, CLOCK_CONF_SECOND*5);
@@ -136,5 +138,8 @@ PROCESS_THREAD(init_system_process, ev, data) {
       if (etimer_expired(&time_poll))
         etimer_reset(&time_poll);
   }
+
+  powertrace_stop();
+
   PROCESS_END();
 }
