@@ -45,15 +45,15 @@
 /*!
   @brief Se definida habilita mensagens de debug da rede MQTT-SN
 */
-//#define DEBUG_MQTT_SN
+#define DEBUG_MQTT_SN
 /*!
   @brief Se definida habilita mensagens de debug do sistema operacional
 */
-#define DEBUG_OS
+//#define DEBUG_OS
 /*!
   @brief Se definida habilita mensagens de debug de tarefas da fila utilizada pelo MQTT-SN
 */
-#define DEBUG_TASK
+//#define DEBUG_TASK
 //#define DEBUG_UDP
 /** @}*/
 
