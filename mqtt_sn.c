@@ -417,7 +417,7 @@ void mqtt_sn_ping_send(void){
   ping_request.client_id[strlen(g_mqtt_sn_con.client_id)] = '\0';
   //debug_mqtt("Client ID PING:%s",ping_request.client_id);
   ping_request.length = 0x02 + strlen(ping_request.client_id);
-  //debug_mqtt("Enviando @PINGREQ");
+  debug_mqtt("Enviando @PINGREQ");
   simple_udp_send(&g_mqtt_sn_con.udp_con,&ping_request, ping_request.length);
 }
 

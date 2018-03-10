@@ -49,12 +49,13 @@ static struct   etimer time_poll;
 static char     pub_test[20];
 static char     device_id[17];
 static char     topic_hw[25];
-static char     *topics_mqtt[] = {"/topic_1",
+static char     *topics_mqtt[] = {"/topic_1"};
+/* static char     *topics_mqtt[] = {"/topic_1",
                                   "/topic_2",
                                   "/topic_3",
                                   "/topic_4",
                                   "/topic_5",
-                                  "/topic_6"};
+                                  "/topic_6"}; */
 // static char     *will_topic = "/6lowpan_node/offline";
 // static char     *will_message = "O dispositivo esta offline";
 // This topics will run so much faster than others
@@ -62,8 +63,9 @@ static char     *topics_mqtt[] = {"/topic_1",
 mqtt_sn_con_t mqtt_sn_connection;
 
 void mqtt_sn_callback(char *topic, char *message){
-  printf("\nMessage received:");
+  //printf("\nMessage received:");
   printf("\nTopic:%s Message:%s",topic,message);
+  debug_mqtt("Receive message @RECV_SUBSCRIBE");
 }
 
 void init_broker(void){
@@ -107,7 +109,8 @@ PROCESS_THREAD(init_system_process, ev, data) {
   PROCESS_BEGIN();
 
   debug_os("Initializing the MQTT_SN_DEMO");
-  powertrace_start(CLOCK_SECOND * 1);
+  powertrace_start(CLOCK_SECOND / 10 );
+  //powertrace_start(CLOCK_SECOND * 1);
 
   init_broker();
 
