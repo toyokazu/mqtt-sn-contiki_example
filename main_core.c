@@ -66,7 +66,7 @@ mqtt_sn_con_t mqtt_sn_connection;
 
 void mqtt_sn_callback(char *topic, char *message){
   //printf("Message received %d:\n", pub_sub_loop++);
-  printf("Topic:%s Message:%s\n",topic,message);
+  //printf("Topic:%s Message:%s\n",topic,message);
 }
 
 void init_broker(void){
@@ -97,8 +97,9 @@ AUTOSTART_PROCESSES(&init_system_process);
 PROCESS_THREAD(init_system_process, ev, data) {
   PROCESS_BEGIN();
 
-  debug_os("Initializing the MQTT_SN_DEMO\n");
-  powertrace_start(CLOCK_SECOND * 1);
+  //debug_os("Initializing the MQTT_SN_DEMO\n");
+  powertrace_start(CLOCK_SECOND / 10);
+  //powertrace_start(CLOCK_SECOND * 1);
 
 #if 0
   etimer_set(&time_poll, CLOCK_CONF_SECOND*5);
@@ -133,7 +134,7 @@ PROCESS_THREAD(init_system_process, ev, data) {
       PROCESS_WAIT_EVENT();
       sprintf(pub_test,"%s",topic_hw);
       mqtt_sn_pub("/topic_1",pub_test,true,0);
-      printf("State MQTT:%s\n",mqtt_sn_check_status_string());
+      //printf("State MQTT:%s\n",mqtt_sn_check_status_string());
       //printf("Message sent %d:\n", pub_sub_loop);
       if (etimer_expired(&time_poll))
         etimer_reset(&time_poll);
