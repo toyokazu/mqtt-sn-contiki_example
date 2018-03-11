@@ -112,14 +112,14 @@ PROCESS_THREAD(init_system_process, ev, data) {
   powertrace_start(CLOCK_SECOND / 10 );
   //powertrace_start(CLOCK_SECOND * 1);
 
-  init_broker();
+  //init_broker();
 
   etimer_set(&time_poll, CLOCK_SECOND);
 
   while(1) {
       PROCESS_WAIT_EVENT();
-      sprintf(pub_test,"%s",topic_hw);
-      mqtt_sn_pub("/topic_1",pub_test,true,0);
+      //sprintf(pub_test,"%s",topic_hw);
+      //mqtt_sn_pub("/topic_1",pub_test,true,0);
       // debug_os("State MQTT:%s",mqtt_sn_check_status_string());
       if (etimer_expired(&time_poll))
         etimer_reset(&time_poll);
