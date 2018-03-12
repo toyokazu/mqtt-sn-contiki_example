@@ -97,7 +97,8 @@ void init_broker(void){
                      all_topics,
                      ss(all_topics),
                      mqtt_sn_callback);
-  mqtt_sn_sub(topic_hw,0);
+  //mqtt_sn_sub("/topic_1",0);
+  //mqtt_sn_sub(topic_hw,0);
 }
 
 /*---------------------------------------------------------------------------*/
