@@ -66,7 +66,8 @@ mqtt_sn_con_t mqtt_sn_connection;
 
 void mqtt_sn_callback(char *topic, char *message){
   //printf("Message received %d:\n", pub_sub_loop++);
-  //printf("Topic:%s Message:%s\n",topic,message);
+  printf("Topic:%s Message:%s\n",topic,message);
+  debug_mqtt("Receive message @RECV_SUBSCRIBE");
 }
 
 void init_broker(void){
